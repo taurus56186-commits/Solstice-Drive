@@ -1,0 +1,6 @@
+{
+  "name": "Solstice Drive",
+  "description": "Playable 3D late-afternoon sunset coastal city driving prototype built with Three.js, modular vehicle physics, procedural city architecture, and integrated creative studio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
