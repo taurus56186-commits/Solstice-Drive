@@ -55,20 +55,25 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
   const [musicError, setMusicError] = useState('');
   const [musicTrack, setMusicTrack] = useState<StudioAudioTrack | null>(null);
 
-  // High-Quality Image + Aspect Ratio state
+  // Create & Edit Image state (gemini-nano-banana-2.1 & gemini-3-pro-image-preview)
+  const [imageMode, setImageMode] = useState<'create' | 'edit'>('create');
   const [imagePrompt, setImagePrompt] = useState(
     'Editorial golden-hour automotive photograph of a vermilion GT sports coupe parked at a palm-lined coastal city intersection, reflective asphalt, dramatic sunset clouds',
   );
   const [imageModel, setImageModel] = useState<'gemini-3-pro-image-preview' | 'gemini-nano-banana-2.1'>(
-    'gemini-3-pro-image-preview',
+    'gemini-nano-banana-2.1',
   );
   const [imageRatio, setImageRatio] = useState<string>('16:9');
   const [imageSize, setImageSize] = useState<string>('2K');
+  const [editSourcePreview, setEditSourcePreview] = useState<string>('');
+  const [editSourceBase64, setEditSourceBase64] = useState<string>('');
+  const [editSourceMime, setEditSourceMime] = useState<string>('image/png');
   const [imageLoading, setImageLoading] = useState(false);
   const [imageError, setImageError] = useState('');
   const [imageResult, setImageResult] = useState<StudioImageResult | null>(null);
 
-  // Animate Image to Video state (gemini-omni-1.2-flash)
+  // Text-to-Video & Animate Image-to-Video state (gemini-omni-1.2-flash)
+  const [videoMode, setVideoMode] = useState<'text' | 'animate'>('text');
   const [videoSourcePreview, setVideoSourcePreview] = useState<string>('');
   const [videoSourceBase64, setVideoSourceBase64] = useState<string>('');
   const [videoSourceMime, setVideoSourceMime] = useState<string>('image/png');
@@ -168,9 +173,41 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
     }
   };
 
+  const handleEditImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      const commaIdx = dataUrl.indexOf(',');
+      if (commaIdx > 0) {
+        setEditSourcePreview(dataUrl);
+        setEditSourceBase64(dataUrl.slice(commaIdx + 1));
+        setEditSourceMime(file.type || 'image/png');
+        setImageError('');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSnap3DForImageEdit = () => {
+    const dataUrl = onCapture3DSnapshot();
+    const commaIdx = dataUrl.indexOf(',');
+    if (commaIdx > 0) {
+      setEditSourcePreview(dataUrl);
+      setEditSourceBase64(dataUrl.slice(commaIdx + 1));
+      setEditSourceMime('image/png');
+      setImageError('');
+    }
+  };
+
   const handleGenerateImage = async () => {
     if (!imagePrompt.trim()) {
-      setImageError('Please enter a prompt for studio image generation.');
+      setImageError('Please enter a prompt or edit instruction.');
+      return;
+    }
+    if (imageMode === 'edit' && !editSourceBase64) {
+      setImageError('Upload a photo or click "Snap 3D View" to edit.');
       return;
     }
     setImageError('');
@@ -184,6 +221,8 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
           model: imageModel,
           aspectRatio: imageRatio,
           imageSize,
+          sourceImageBase64: imageMode === 'edit' ? editSourceBase64 : undefined,
+          sourceMimeType: imageMode === 'edit' ? editSourceMime : undefined,
         }),
       });
       const data = await res.json();
@@ -225,8 +264,12 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
   };
 
   const handleAnimateVideo = async () => {
-    if (!videoSourceBase64) {
+    if (videoMode === 'animate' && !videoSourceBase64) {
       setVideoError('Upload a photo or click "Snap 3D View" first.');
+      return;
+    }
+    if (videoMode === 'text' && !videoPrompt.trim()) {
+      setVideoError('Enter a text prompt describing the video scene.');
       return;
     }
     setVideoError('');
@@ -236,17 +279,17 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          imageBase64: videoSourceBase64,
-          mimeType: videoSourceMime,
+          imageBase64: videoMode === 'animate' ? videoSourceBase64 : undefined,
+          mimeType: videoMode === 'animate' ? videoSourceMime : undefined,
           prompt: videoPrompt.trim(),
           aspectRatio: videoAspect,
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Video animation failed.');
+      if (!res.ok) throw new Error(data.error || 'Video generation failed.');
       setVideoResult(data);
     } catch (err) {
-      setVideoError(err instanceof Error ? err.message : 'Video animation failed.');
+      setVideoError(err instanceof Error ? err.message : 'Video generation failed.');
     } finally {
       setVideoLoading(false);
     }
@@ -266,8 +309,8 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
               ['tune', 'World & Physics'],
               ['copilot', 'Co-Pilot'],
               ['music', 'Music'],
-              ['image', 'Studio Image'],
-              ['video', 'Animate Video'],
+              ['image', 'Image Studio'],
+              ['video', 'Video Studio'],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -601,8 +644,35 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
         {tab === 'image' && (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="font-mono-hud text-[11px] uppercase tracking-[0.16em] text-[#ffb978]">
-                High-Resolution Poster &amp; Concept Studio
+              <div className="flex items-center gap-2">
+                <span className="font-mono-hud text-[11px] uppercase tracking-[0.16em] text-[#ffb978]">
+                  Create &amp; Edit Studio
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setImageMode('create')}
+                  className={`px-2.5 py-1 text-[11px] font-mono-hud uppercase border cursor-pointer ${
+                    imageMode === 'create'
+                      ? 'bg-[#e85a32] border-[#ffd6a8] text-[#fff8f0]'
+                      : 'bg-[#261a2e] border-[#ffb978]/25 text-[#f0cfb3]'
+                  }`}
+                >
+                  Create New
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImageMode('edit');
+                    setImageModel('gemini-nano-banana-2.1');
+                  }}
+                  className={`px-2.5 py-1 text-[11px] font-mono-hud uppercase border cursor-pointer ${
+                    imageMode === 'edit'
+                      ? 'bg-[#e85a32] border-[#ffd6a8] text-[#fff8f0]'
+                      : 'bg-[#261a2e] border-[#ffb978]/25 text-[#f0cfb3]'
+                  }`}
+                >
+                  Edit Photo
+                </button>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <label className="flex items-center gap-1.5 text-xs font-mono-hud text-[#f2d6be]">
@@ -616,8 +686,8 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
                     }
                     className="bg-[#120c17] border border-[#ffb978]/35 px-2 py-1 text-xs text-[#fff6ec]"
                   >
-                    <option value="gemini-3-pro-image-preview">gemini-3-pro-image-preview</option>
                     <option value="gemini-nano-banana-2.1">gemini-nano-banana-2.1</option>
+                    <option value="gemini-3-pro-image-preview">gemini-3-pro-image-preview</option>
                   </select>
                 </label>
 
@@ -653,6 +723,34 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
               </div>
             </div>
 
+            {imageMode === 'edit' && (
+              <div className="flex flex-wrap items-center gap-2.5">
+                <label className="px-3 py-1.5 bg-[#2a1d33] hover:bg-[#382745] border border-[#ffb978]/35 text-xs font-mono-hud uppercase tracking-wider text-[#fff2e3] cursor-pointer">
+                  Upload Photo to Edit
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleEditImageUpload}
+                    className="hidden"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={handleSnap3DForImageEdit}
+                  className="px-3 py-1.5 bg-[#2a1d33] hover:bg-[#382745] border border-[#ffb978]/35 text-xs font-mono-hud uppercase tracking-wider text-[#ffb978] cursor-pointer"
+                >
+                  Snap 3D View
+                </button>
+                {editSourcePreview && (
+                  <img
+                    src={editSourcePreview}
+                    alt="Source photo to edit"
+                    className="h-10 w-auto border border-[#ffb978]/40 object-cover"
+                  />
+                )}
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row gap-2">
               <label htmlFor="studio-image-prompt" className="sr-only">
                 Studio image prompt
@@ -662,6 +760,11 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
                 type="text"
                 value={imagePrompt}
                 onChange={(e) => setImagePrompt(e.target.value)}
+                placeholder={
+                  imageMode === 'edit'
+                    ? 'Describe edits: e.g. Add neon rain reflections and a dramatic purple sunset sky...'
+                    : 'Describe the image to create...'
+                }
                 className="flex-1 px-3 py-2 bg-[#120c17] border border-[#ffb978]/35 text-sm text-[#fff6ec]"
               />
               <button
@@ -670,7 +773,11 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
                 onClick={() => void handleGenerateImage()}
                 className="px-4 py-2 bg-[#e85a32] hover:bg-[#f26b42] disabled:opacity-50 text-xs font-mono-hud font-bold uppercase tracking-wider text-[#fff8f0] cursor-pointer"
               >
-                {imageLoading ? 'Rendering...' : 'Generate Image'}
+                {imageLoading
+                  ? 'Rendering...'
+                  : imageMode === 'edit'
+                    ? 'Edit Image'
+                    : 'Create Image'}
               </button>
             </div>
 
@@ -708,8 +815,32 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
         {tab === 'video' && (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="font-mono-hud text-[11px] uppercase tracking-[0.16em] text-[#ffb978]">
-                Animate Photo into Video · gemini-omni-1.2-flash (Interactions API)
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono-hud text-[11px] uppercase tracking-[0.16em] text-[#ffb978]">
+                  Video Studio · gemini-omni-1.2-flash
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setVideoMode('text')}
+                  className={`px-2.5 py-1 text-[11px] font-mono-hud uppercase border cursor-pointer ${
+                    videoMode === 'text'
+                      ? 'bg-[#e85a32] border-[#ffd6a8] text-[#fff8f0]'
+                      : 'bg-[#261a2e] border-[#ffb978]/25 text-[#f0cfb3]'
+                  }`}
+                >
+                  Text to Video
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVideoMode('animate')}
+                  className={`px-2.5 py-1 text-[11px] font-mono-hud uppercase border cursor-pointer ${
+                    videoMode === 'animate'
+                      ? 'bg-[#e85a32] border-[#ffd6a8] text-[#fff8f0]'
+                      : 'bg-[#261a2e] border-[#ffb978]/25 text-[#f0cfb3]'
+                  }`}
+                >
+                  Animate Photo
+                </button>
               </div>
               <div className="flex items-center gap-1.5">
                 {(['16:9', '9:16'] as const).map((ar) => (
@@ -729,37 +860,39 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5">
-              <label className="px-3 py-2 bg-[#2a1d33] hover:bg-[#382745] border border-[#ffb978]/35 text-xs font-mono-hud uppercase tracking-wider text-[#fff2e3] cursor-pointer">
-                Upload Photo
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handlePhotoUpload}
-                  className="hidden"
-                />
-              </label>
+            {videoMode === 'animate' && (
+              <div className="flex flex-wrap items-center gap-2.5">
+                <label className="px-3 py-1.5 bg-[#2a1d33] hover:bg-[#382745] border border-[#ffb978]/35 text-xs font-mono-hud uppercase tracking-wider text-[#fff2e3] cursor-pointer">
+                  Upload Photo
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handlePhotoUpload}
+                    className="hidden"
+                  />
+                </label>
 
-              <button
-                type="button"
-                onClick={handleSnap3DForVideo}
-                className="px-3 py-2 bg-[#2a1d33] hover:bg-[#382745] border border-[#ffb978]/35 text-xs font-mono-hud uppercase tracking-wider text-[#ffb978] cursor-pointer"
-              >
-                Snap 3D View
-              </button>
+                <button
+                  type="button"
+                  onClick={handleSnap3DForVideo}
+                  className="px-3 py-1.5 bg-[#2a1d33] hover:bg-[#382745] border border-[#ffb978]/35 text-xs font-mono-hud uppercase tracking-wider text-[#ffb978] cursor-pointer"
+                >
+                  Snap 3D View
+                </button>
 
-              {videoSourcePreview && (
-                <img
-                  src={videoSourcePreview}
-                  alt="Selected source photo"
-                  className="h-11 w-auto border border-[#ffb978]/40 object-cover"
-                />
-              )}
-            </div>
+                {videoSourcePreview && (
+                  <img
+                    src={videoSourcePreview}
+                    alt="Selected source photo"
+                    className="h-10 w-auto border border-[#ffb978]/40 object-cover"
+                  />
+                )}
+              </div>
+            )}
 
             <div className="flex flex-col sm:flex-row gap-2">
               <label htmlFor="video-motion-prompt" className="sr-only">
-                Motion prompt for video
+                Video generation prompt
               </label>
               <input
                 id="video-motion-prompt"
@@ -774,7 +907,11 @@ export const CreativeStudioDrawer: React.FC<CreativeStudioDrawerProps> = ({
                 onClick={() => void handleAnimateVideo()}
                 className="px-4 py-2 bg-[#e85a32] hover:bg-[#f26b42] disabled:opacity-50 text-xs font-mono-hud font-bold uppercase tracking-wider text-[#fff8f0] cursor-pointer"
               >
-                {videoLoading ? 'Animating...' : 'Animate Video'}
+                {videoLoading
+                  ? 'Generating...'
+                  : videoMode === 'text'
+                    ? 'Generate Video'
+                    : 'Animate Photo'}
               </button>
             </div>
 

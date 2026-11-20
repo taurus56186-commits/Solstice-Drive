@@ -85,7 +85,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({ onStart }) => {
       {/* Single flat borderless control-hint line in bottom safe margin */}
       <div className="w-full flex justify-center sm:justify-start">
         <p className="font-mono-hud text-xs sm:text-[13px] tracking-[0.12em] uppercase text-[#fff1e2]/90 hud-text-shadow">
-          WASD / Arrows Drive · Space Handbrake Drift · C Camera · T Studio &amp; Tune · Esc Pause
+          WASD / Arrows Drive · Space Drift · F Walk &amp; Enter Houses · C Camera · T Studio · Esc Pause
         </p>
       </div>
     </div>

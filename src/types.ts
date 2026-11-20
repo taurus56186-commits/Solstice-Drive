@@ -6,6 +6,8 @@ export type LightingPresetId = 'golden-sunset' | 'twilight-dusk' | 'coastal-afte
 
 export type HandlingPresetId = 'grand-tourer' | 'drift-spec' | 'track-grip';
 
+export type PlayerMode = 'driving' | 'on-foot';
+
 export interface CarTelemetry {
   speedKmh: number;
   rpmRatio: number; // 0..1
@@ -15,6 +17,11 @@ export interface CarTelemetry {
   topSpeedKmh: number;
   distanceKm: number;
   cameraMode: CameraMode;
+  playerMode: PlayerMode;
+  insideHouseName: string | null;
+  nearbyHouseName: string | null;
+  canEnterCar: boolean;
+  elevationY: number;
   posX: number;
   posZ: number;
   heading: number;

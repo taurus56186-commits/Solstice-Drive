@@ -6,6 +6,7 @@ export interface CarModelRig {
   root: THREE.Group;
   bodyGroup: THREE.Group; // pitches & rolls with suspension
   frontWheelPivots: [THREE.Group, THREE.Group];
+  wheelMountGroups: [THREE.Group, THREE.Group, THREE.Group, THREE.Group];
   wheelSpinGroups: [THREE.Group, THREE.Group, THREE.Group, THREE.Group];
   brakeLightMaterial: THREE.MeshStandardMaterial;
   headlightGlowMaterial: THREE.MeshStandardMaterial;
@@ -284,12 +285,14 @@ export function createSportsCar(): CarModelRig {
   ];
 
   const frontPivots: THREE.Group[] = [];
+  const wheelMounts: THREE.Group[] = [];
   const spinGroups: THREE.Group[] = [];
 
   for (const wp of wheelPositions) {
     const steerPivot = new THREE.Group();
     steerPivot.position.set(wp.x, WHEEL_RADIUS, wp.z);
     root.add(steerPivot);
+    wheelMounts.push(steerPivot);
 
     // Non-spinning brake caliper mounted to hub
     const caliper = new THREE.Mesh(caliperGeo, caliperMat);
@@ -341,6 +344,7 @@ export function createSportsCar(): CarModelRig {
     root,
     bodyGroup,
     frontWheelPivots: [frontPivots[0], frontPivots[1]],
+    wheelMountGroups: [wheelMounts[0], wheelMounts[1], wheelMounts[2], wheelMounts[3]],
     wheelSpinGroups: [spinGroups[0], spinGroups[1], spinGroups[2], spinGroups[3]],
     brakeLightMaterial,
     headlightGlowMaterial,

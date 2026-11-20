@@ -22,6 +22,11 @@ const INITIAL_TELEMETRY: CarTelemetry = {
   topSpeedKmh: 0,
   distanceKm: 0,
   cameraMode: 'chase',
+  playerMode: 'driving',
+  insideHouseName: null,
+  nearbyHouseName: null,
+  canEnterCar: false,
+  elevationY: 0,
   posX: 3.6,
   posZ: 27,
   heading: 0,
@@ -129,6 +134,10 @@ export default function App() {
     engineRef.current?.cycleCameraMode();
   }, []);
 
+  const handleTogglePlayerMode = useCallback(() => {
+    engineRef.current?.togglePlayerMode();
+  }, []);
+
   const handleToggleMute = useCallback(() => {
     engineRef.current?.toggleMute();
   }, []);
@@ -166,6 +175,7 @@ export default function App() {
             muted={muted}
             studioOpen={studioOpen}
             onCycleCamera={handleCycleCamera}
+            onTogglePlayerMode={handleTogglePlayerMode}
             onToggleMute={handleToggleMute}
             onTogglePause={() => transitionState('paused')}
             onToggleStudio={handleToggleStudio}

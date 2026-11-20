@@ -1,5 +1,11 @@
 import type { HandlingPresetId } from '../types';
 import type { ColliderBox } from './cityLayout';
+import {
+  groundHeightAt,
+  resolveGroundContact,
+  sampleVehicleSupportPlane,
+  type GroundSurfaceMap,
+} from './groundSurface';
 
 export interface CarInput {
   throttle: boolean;
@@ -9,8 +15,16 @@ export interface CarInput {
   handbrake: boolean;
 }
 
+export interface FootInput {
+  forward: boolean;
+  backward: boolean;
+  left: boolean;
+  right: boolean;
+  sprint: boolean;
+}
+
 export interface HandlingParams {
-  maxForwardSpeed: number; // m/s (e.g. 44 m/s ~ 158 km/h)
+  maxForwardSpeed: number; // m/s
   maxReverseSpeed: number; // m/s
   engineAccel: number; // m/s^2
   brakeDecel: number; // m/s^2
@@ -75,14 +89,16 @@ export const HANDLING_PRESETS: Record<HandlingPresetId, HandlingParams> = {
 
 export interface CarState {
   x: number;
+  y: number; // strictly >= groundHeightAt(x, z)
+  vy: number;
   z: number;
   vx: number;
   vz: number;
   heading: number; // radians; 0 = facing -Z (North), + = CCW (left)
   steerAngle: number; // front wheel steering angle in radians
   wheelSpin: number; // accumulated wheel spin angle in radians
-  pitch: number; // chassis squat/dive in radians
-  roll: number; // chassis body roll in radians
+  pitch: number; // chassis squat/dive + ground slope in radians
+  roll: number; // chassis body roll + ground slope in radians
   forwardSpeed: number; // signed speed along car forward vector (m/s)
   lateralSpeed: number; // signed sideways slip speed (m/s)
   speedKmh: number;
@@ -92,6 +108,17 @@ export interface CarState {
   topSpeedKmh: number;
   distanceMeters: number;
   lastImpactStrength: number; // 0..1 on frame of collision
+  wheelGroundYs: [number, number, number, number]; // [FL, FR, RL, RR] ground height at each wheel contact point
+}
+
+export interface FootPlayerState {
+  x: number;
+  y: number; // strictly >= groundHeightAt(x, z)
+  vy: number;
+  z: number;
+  heading: number;
+  walkPhase: number;
+  speedMs: number;
 }
 
 export interface CarStepResult {
@@ -100,11 +127,14 @@ export interface CarStepResult {
 }
 
 export const CAR_COLLISION_RADIUS = 1.65;
+export const FOOT_COLLISION_RADIUS = 0.45;
 export const WHEEL_RADIUS = 0.36;
 
-export function createInitialCarState(x: number, z: number, heading = 0): CarState {
+export function createInitialCarState(x: number, z: number, heading = 0, groundY = 0): CarState {
   return {
     x,
+    y: Math.max(0, groundY),
+    vy: 0,
     z,
     vx: 0,
     vz: 0,
@@ -122,6 +152,19 @@ export function createInitialCarState(x: number, z: number, heading = 0): CarSta
     topSpeedKmh: 0,
     distanceMeters: 0,
     lastImpactStrength: 0,
+    wheelGroundYs: [Math.max(0, groundY), Math.max(0, groundY), Math.max(0, groundY), Math.max(0, groundY)],
+  };
+}
+
+export function createFootPlayerState(x: number, z: number, heading = 0, groundY = 0): FootPlayerState {
+  return {
+    x,
+    y: Math.max(0, groundY),
+    vy: 0,
+    z,
+    heading,
+    walkPhase: 0,
+    speedMs: 0,
   };
 }
 
@@ -154,6 +197,7 @@ export function stepCarPhysics(
   colliders: ColliderBox[],
   worldBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
   handlingPreset: HandlingPresetId = 'grand-tourer',
+  groundSurface?: GroundSurfaceMap,
 ): CarStepResult {
   const dt = Math.min(Math.max(rawDt, 0), 0.05);
   const params = HANDLING_PRESETS[handlingPreset];
@@ -173,9 +217,7 @@ export function stepCarPhysics(
   let vLat = state.vx * rightX + state.vz * rightZ;
 
   // Steering input smoothing (left = +1, right = -1)
-  const steerTarget =
-    (input.steerLeft ? 1 : 0) - (input.steerRight ? 1 : 0);
-  // Subtle high-speed steering authority taper so highway driving feels composed
+  const steerTarget = (input.steerLeft ? 1 : 0) - (input.steerRight ? 1 : 0);
   const speedRatio = Math.min(1, Math.abs(vFwd) / params.maxForwardSpeed);
   const effectiveMaxSteer = params.maxSteerAngle * (1 - 0.34 * speedRatio);
   const desiredSteer = steerTarget * effectiveMaxSteer;
@@ -191,7 +233,6 @@ export function stepCarPhysics(
       longAccel += params.brakeDecel;
       braking = true;
     } else {
-      // Smooth torque curve that pulls strongly off the line and tapers toward top speed
       const torqueScale = Math.max(0.18, 1 - Math.pow(Math.max(0, vFwd) / params.maxForwardSpeed, 1.8));
       longAccel += params.engineAccel * torqueScale;
     }
@@ -219,15 +260,12 @@ export function stepCarPhysics(
   const dragAccel = -vFwd * params.rollingDrag - vFwd * Math.abs(vFwd) * params.aeroDrag;
   vFwd += (longAccel + dragAccel) * dt;
 
-  // Gentle creep stop near zero when no pedals pressed
   if (!input.throttle && !input.brakeReverse && Math.abs(vFwd) < 0.14) {
     vFwd = 0;
   }
 
-  // Clamp forward / reverse speed
   vFwd = Math.max(-params.maxReverseSpeed, Math.min(params.maxForwardSpeed, vFwd));
 
-  // Steering yaw rate (scales smoothly from zero speed, reverses when backing up)
   const absFwd = Math.abs(vFwd);
   const speedFactor = Math.min(1, absFwd / 5.5);
   const reverseSign = vFwd >= -0.05 ? 1 : -1;
@@ -236,23 +274,19 @@ export function stepCarPhysics(
 
   if (absFwd > 0.08) {
     state.heading += yawRate * dt;
-    // Normalize heading into [-PI, PI]
     if (state.heading > Math.PI) state.heading -= Math.PI * 2;
     if (state.heading < -Math.PI) state.heading += Math.PI * 2;
   }
 
-  // Induce natural slip when handbrake drifting or cornering hard at speed
   if (input.handbrake && absFwd > 6.5 && Math.abs(state.steerAngle) > 0.06) {
     vLat -= Math.sign(state.steerAngle) * Math.min(14, absFwd * 0.42) * dt * 2.2;
   } else if (absFwd > 14 && Math.abs(state.steerAngle) > 0.12) {
     vLat -= Math.sign(state.steerAngle) * absFwd * 0.06 * dt;
   }
 
-  // Lateral grip damping (low grip during handbrake creates satisfying tail-out drift!)
   const activeGrip = input.handbrake ? params.driftLateralGrip : params.lateralGrip;
   vLat *= Math.exp(-activeGrip * dt);
 
-  // Recompute updated forward/right axes after yaw step
   const newFwdX = -Math.sin(state.heading);
   const newFwdZ = -Math.cos(state.heading);
   const newRightX = Math.cos(state.heading);
@@ -266,15 +300,15 @@ export function stepCarPhysics(
   state.x += state.vx * dt;
   state.z += state.vz * dt;
 
-  // Resolve static AABB collisions (buildings, seawall) & outer world bounds
+  // Resolve static AABB collisions (buildings, house walls, seawall)
   let collided = false;
   let impactStrength = 0;
 
   for (const box of colliders) {
     const closestX = Math.max(box.minX, Math.min(state.x, box.maxX));
     const closestZ = Math.max(box.minZ, Math.min(state.z, box.maxZ));
-    let dx = state.x - closestX;
-    let dz = state.z - closestZ;
+    const dx = state.x - closestX;
+    const dz = state.z - closestZ;
     const distSq = dx * dx + dz * dz;
 
     if (distSq < CAR_COLLISION_RADIUS * CAR_COLLISION_RADIUS) {
@@ -283,7 +317,6 @@ export function stepCarPhysics(
       let nx = 0;
       let nz = 0;
       if (dist < 1e-5) {
-        // Fallback push toward nearest face if center somehow inside box
         const dLeft = Math.abs(state.x - box.minX);
         const dRight = Math.abs(box.maxX - state.x);
         const dTop = Math.abs(state.z - box.minZ);
@@ -314,7 +347,6 @@ export function stepCarPhysics(
       const vn = state.vx * nx + state.vz * nz;
       if (vn < 0) {
         impactStrength = Math.max(impactStrength, Math.min(1, Math.abs(vn) / 18));
-        // Gentle bounce + tangential slide so player can scrape and recover cleanly
         const restitution = 0.22;
         state.vx -= (1 + restitution) * vn * nx;
         state.vz -= (1 + restitution) * vn * nz;
@@ -357,7 +389,26 @@ export function stepCarPhysics(
     }
   }
 
-  // Recompute post-collision telemetry
+  // --- Point-of-Intersection Ground Elevation & Strict Non-Sinking Constraint (y >= groundY) ---
+  let slopePitch = 0;
+  let slopeRoll = 0;
+  const support = groundSurface
+    ? sampleVehicleSupportPlane(state.x, state.z, state.heading, groundSurface)
+    : {
+        supportY: 0,
+        slopePitch: 0,
+        slopeRoll: 0,
+        wheelGroundYs: [0, 0, 0, 0] as [number, number, number, number],
+      };
+  slopePitch = support.slopePitch;
+  slopeRoll = support.slopeRoll;
+  state.wheelGroundYs = support.wheelGroundYs;
+
+  const contact = resolveGroundContact(state.y, state.vy, support.supportY, dt);
+  state.y = contact.y;
+  state.vy = contact.vy;
+
+  // Post-collision telemetry
   const finalFwd = state.vx * newFwdX + state.vz * newFwdZ;
   const finalLat = state.vx * newRightX + state.vz * newRightZ;
   const totalSpeed = Math.hypot(state.vx, state.vz);
@@ -369,17 +420,14 @@ export function stepCarPhysics(
   state.braking = braking;
   state.lastImpactStrength = impactStrength;
 
-  // Wheel spin synced directly to forward travel distance
   state.wheelSpin += (finalFwd * dt) / WHEEL_RADIUS;
 
-  // Distance odometer & top speed
   const stepDist = Math.hypot(state.x - prevX, state.z - prevZ);
   state.distanceMeters += stepDist;
   if (speedKmh > state.topSpeedKmh) {
     state.topSpeedKmh = speedKmh;
   }
 
-  // Drift detection & score accrual
   const isDrifting =
     totalSpeed > 6.5 && (Math.abs(finalLat) > 2.2 || (input.handbrake && Math.abs(state.steerAngle) > 0.14));
   state.isDrifting = isDrifting;
@@ -387,12 +435,80 @@ export function stepCarPhysics(
     state.driftScore += Math.round((Math.abs(finalLat) * 14 + speedKmh * 0.45) * dt);
   }
 
-  // Subtle physical suspension pitch (squat on accel, dive on brake) & body roll on turns
-  const targetPitch = Math.max(-0.045, Math.min(0.045, (longAccel / 32) * 0.036));
-  const targetRoll = Math.max(-0.065, Math.min(0.065, -(yawRate * Math.min(1, totalSpeed / 18)) * 0.045));
+  // Suspension pitch/roll combined with exact ground slope
+  const targetPitch = Math.max(-0.045, Math.min(0.045, (longAccel / 32) * 0.036)) + slopePitch;
+  const targetRoll = Math.max(-0.065, Math.min(0.065, -(yawRate * Math.min(1, totalSpeed / 18)) * 0.045)) + slopeRoll;
   const suspAlpha = 1 - Math.exp(-10 * dt);
   state.pitch += (targetPitch - state.pitch) * suspAlpha;
   state.roll += (targetRoll - state.roll) * suspAlpha;
 
   return { collided, impactStrength };
+}
+
+/**
+ * On-Foot Player Physics: allows walking out of the car, along sidewalks,
+ * straight through open house doorways into interiors, and back outside.
+ * Strictly enforces y >= groundHeightAt(x, z) so the character never sinks!
+ */
+export function stepFootPlayerPhysics(
+  player: FootPlayerState,
+  input: FootInput,
+  rawDt: number,
+  colliders: ColliderBox[],
+  worldBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  groundSurface: GroundSurfaceMap,
+): void {
+  const dt = Math.min(Math.max(rawDt, 0), 0.05);
+  if (dt <= 0) return;
+
+  // Turn with A/D (Left/Right), move forward/back along heading with W/S (Up/Down)
+  const turnInput = (input.left ? 1 : 0) - (input.right ? 1 : 0);
+  if (turnInput !== 0) {
+    player.heading += turnInput * 2.55 * dt;
+    if (player.heading > Math.PI) player.heading -= Math.PI * 2;
+    if (player.heading < -Math.PI) player.heading += Math.PI * 2;
+  }
+
+  const moveInput = (input.forward ? 1 : 0) - (input.backward ? 1 : 0);
+  const maxSpeed = input.sprint ? 7.2 : 4.2;
+  const targetSpeed = moveInput * maxSpeed;
+
+  const fwdX = -Math.sin(player.heading);
+  const fwdZ = -Math.cos(player.heading);
+
+  const nextX = player.x + fwdX * targetSpeed * dt;
+  const nextZ = player.z + fwdZ * targetSpeed * dt;
+
+  player.x = Math.max(worldBounds.minX + 1.0, Math.min(worldBounds.maxX - 1.0, nextX));
+  player.z = Math.max(worldBounds.minZ + 1.0, Math.min(worldBounds.maxZ - 1.0, nextZ));
+
+  // Resolve against building & per-wall house colliders (open doorways stay completely passable!)
+  for (const box of colliders) {
+    const closestX = Math.max(box.minX, Math.min(player.x, box.maxX));
+    const closestZ = Math.max(box.minZ, Math.min(player.z, box.maxZ));
+    const dx = player.x - closestX;
+    const dz = player.z - closestZ;
+    const distSq = dx * dx + dz * dz;
+    if (distSq < FOOT_COLLISION_RADIUS * FOOT_COLLISION_RADIUS) {
+      const dist = Math.sqrt(distSq);
+      if (dist > 1e-5) {
+        const push = FOOT_COLLISION_RADIUS - dist + 0.005;
+        player.x += (dx / dist) * push;
+        player.z += (dz / dist) * push;
+      } else {
+        player.z += FOOT_COLLISION_RADIUS;
+      }
+    }
+  }
+
+  // Strict point-of-intersection ground clamp: y >= groundHeightAt(x, z)
+  const groundY = groundHeightAt(player.x, player.z, groundSurface);
+  const contact = resolveGroundContact(player.y, player.vy, groundY, dt);
+  player.y = contact.y;
+  player.vy = contact.vy;
+
+  player.speedMs = Math.abs(targetSpeed);
+  if (player.speedMs > 0.1) {
+    player.walkPhase += player.speedMs * dt * 2.2;
+  }
 }

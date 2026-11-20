@@ -175,38 +175,45 @@ async function startServer() {
     }
   });
 
-  // 3. High-Quality Image Generation + Aspect Ratio Control
-  // Supports gemini-3-pro-image-preview (1K/2K/4K) and gemini-nano-banana-2.1
+  // 3. Create & Edit Images + Aspect Ratio Control
+  // Supports gemini-nano-banana-2.1 (create & edit) and gemini-3-pro-image-preview (1K/2K/4K)
   const ALLOWED_RATIOS = new Set(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']);
   const ALLOWED_SIZES = new Set(['1K', '2K', '4K']);
 
   app.post('/api/ai/image', async (req, res) => {
     try {
-      const { prompt, model, aspectRatio, imageSize } = req.body as {
+      const { prompt, model, aspectRatio, imageSize, sourceImageBase64, sourceMimeType } = req.body as {
         prompt?: string;
         model?: 'gemini-3-pro-image-preview' | 'gemini-nano-banana-2.1';
         aspectRatio?: string;
         imageSize?: string;
+        sourceImageBase64?: string;
+        sourceMimeType?: string;
       };
 
       if (!prompt || !prompt.trim()) {
-        res.status(400).json({ error: 'Please provide an image prompt.' });
+        res.status(400).json({ error: 'Please provide an image prompt or edit instruction.' });
         return;
       }
 
+      const isEdit = Boolean(sourceImageBase64 && sourceMimeType);
       const safeModel =
-        model === 'gemini-nano-banana-2.1'
+        model === 'gemini-nano-banana-2.1' || (isEdit && !model)
           ? 'gemini-nano-banana-2.1'
           : 'gemini-3-pro-image-preview';
       const safeRatio = aspectRatio && ALLOWED_RATIOS.has(aspectRatio) ? aspectRatio : '16:9';
       const safeSize = imageSize && ALLOWED_SIZES.has(imageSize) ? imageSize : '1K';
 
+      const parts: Array<{ text: string } | { inlineData: { data: string; mimeType: string } }> = [];
+      if (isEdit && sourceImageBase64 && sourceMimeType) {
+        parts.push({ inlineData: { data: sourceImageBase64, mimeType: sourceMimeType } });
+      }
+      parts.push({ text: prompt.trim() });
+
       const ai = getAiClient();
       const response = await ai.models.generateContent({
         model: safeModel,
-        contents: {
-          parts: [{ text: prompt.trim() }],
-        },
+        contents: { parts },
         config: {
           imageConfig: {
             aspectRatio: safeRatio,
@@ -244,7 +251,7 @@ async function startServer() {
     }
   });
 
-  // 4. Animate Photo into Video (gemini-omni-1.2-flash via Interactions API)
+  // 4. Generate Video from Text OR Animate Photo into Video (gemini-omni-1.2-flash via Interactions API)
   app.post('/api/ai/video', async (req, res) => {
     try {
       const { imageBase64, mimeType, prompt, aspectRatio } = req.body as {
@@ -254,22 +261,22 @@ async function startServer() {
         aspectRatio?: '16:9' | '9:16';
       };
 
-      if (!imageBase64 || !mimeType) {
-        res.status(400).json({ error: 'Please upload a photo or capture the 3D viewport first.' });
+      const hasImage = Boolean(imageBase64 && mimeType);
+      const motionPrompt =
+        prompt && prompt.trim()
+          ? prompt.trim()
+          : hasImage
+            ? 'Smooth golden-hour cinematic tracking shot as palm trees sway and sunset light shimmers across the coastal avenue.'
+            : '';
+
+      if (!hasImage && !motionPrompt) {
+        res.status(400).json({ error: 'Enter a text prompt to generate a video, or upload/snap a photo to animate.' });
         return;
       }
 
       const safeRatio: '16:9' | '9:16' = aspectRatio === '9:16' ? '9:16' : '16:9';
-      const motionPrompt =
-        prompt && prompt.trim()
-          ? prompt.trim()
-          : 'Smooth golden-hour cinematic tracking shot as palm trees sway and sunset light shimmers across the coastal avenue.';
-
-      const ai = getAiClient();
-      const interaction = await ai.interactions.create(
-        {
-          model: 'gemini-omni-1.2-flash',
-          input: [
+      const inputPayload = hasImage
+        ? [
             {
               type: 'image',
               mime_type: mimeType,
@@ -279,7 +286,19 @@ async function startServer() {
               type: 'text',
               text: motionPrompt,
             },
-          ],
+          ]
+        : [
+            {
+              type: 'text',
+              text: motionPrompt,
+            },
+          ];
+
+      const ai = getAiClient();
+      const interaction = await ai.interactions.create(
+        {
+          model: 'gemini-omni-1.2-flash',
+          input: inputPayload,
           background: false,
           store: false,
           stream: false,

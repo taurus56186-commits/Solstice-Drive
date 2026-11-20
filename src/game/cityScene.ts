@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import type { BuildingSpec, CityLayout } from './cityLayout';
+import { buildEnterableHouses } from './houseBuilder';
+import { createPedestrianSystem, type PedestrianSystem } from './pedestrianSystem';
 import {
   createBuildingFacadeTextures,
   createIntersectionTexture,
@@ -20,6 +22,7 @@ export interface CitySceneAssets {
   windowMaterials: THREE.MeshStandardMaterial[];
   roadMaterials: THREE.MeshStandardMaterial[];
   streetPointLights: THREE.PointLight[];
+  pedestrianSystem: PedestrianSystem;
   updateAmbient: (elapsedSec: number, dt: number, sunDir: THREE.Vector3) => void;
   smokePool: DriftSmokePool;
   dispose: () => void;
@@ -50,9 +53,9 @@ export function buildCoastalCityScene(
     return t;
   };
 
-  // --- 1. Extended Ground Plane & Golden Sunset Pacific Ocean ---
-  // Inland ground base beneath city (y = -0.06, well below road at y = 0.0)
-  const inlandGroundGeo = trackGeo(new THREE.PlaneGeometry(520, 620));
+  // --- 1. Extended Ground Plane & Golden Sunset Pacific Ocean (Expanded 320m x 360m City!) ---
+  // Inland ground base beneath city (y = -0.06, well below road at y = 0.0, strictly east of seawall x = -94)
+  const inlandGroundGeo = trackGeo(new THREE.PlaneGeometry(700, 760));
   inlandGroundGeo.rotateX(-Math.PI / 2);
   const inlandGroundMat = trackMat(
     new THREE.MeshStandardMaterial({
@@ -62,12 +65,12 @@ export function buildCoastalCityScene(
     }),
   );
   const inlandGround = new THREE.Mesh(inlandGroundGeo, inlandGroundMat);
-  inlandGround.position.set(204, -0.06, 0);
+  inlandGround.position.set(256, -0.06, 0);
   inlandGround.receiveShadow = true;
   root.add(inlandGround);
 
-  // Shimmering Pacific Ocean stretching from seawall (-56) out to the sunset horizon (-680)
-  const oceanGeo = trackGeo(new THREE.PlaneGeometry(660, 900, 48, 48));
+  // Shimmering Pacific Ocean stretching from seawall (-94) out to the sunset horizon (-800)
+  const oceanGeo = trackGeo(new THREE.PlaneGeometry(760, 1180, 48, 48));
   oceanGeo.rotateX(-Math.PI / 2);
   const oceanUniforms = {
     uTime: { value: 0 },
@@ -110,16 +113,16 @@ export function buildCoastalCityScene(
       );
   };
   const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
-  oceanMesh.position.set(-384, -1.35, 0);
+  oceanMesh.position.set(-474, -1.35, 0);
   root.add(oceanMesh);
 
-  // Sandy coastal embankment sloping down from seawall to ocean
-  const beachGeo = trackGeo(new THREE.BoxGeometry(10, 1.8, 220));
+  // Sandy coastal embankment sloping down from expanded seawall (-94) to ocean
+  const beachGeo = trackGeo(new THREE.BoxGeometry(12, 1.8, 380));
   const beachMat = trackMat(
     new THREE.MeshStandardMaterial({ color: 0xc29c76, roughness: 0.92, metalness: 0.02 }),
   );
   const beach = new THREE.Mesh(beachGeo, beachMat);
-  beach.position.set(-59, -1.2, 0);
+  beach.position.set(-98, -1.2, 0);
   beach.rotation.z = 0.22;
   root.add(beach);
 
@@ -241,13 +244,13 @@ export function buildCoastalCityScene(
     root.add(mesh);
   }
 
-  // Architectural Coastal Seawall Balustrade along west edge of boardwalk (x = -55.4)
+  // Architectural Coastal Seawall Balustrade along west edge of expanded boardwalk (x = -94.0)
   const seawallMat = trackMat(
     new THREE.MeshStandardMaterial({ color: 0xd9cbb8, roughness: 0.82, metalness: 0.04 }),
   );
-  const seawallBaseGeo = trackGeo(new THREE.BoxGeometry(0.9, 1.15, 160));
+  const seawallBaseGeo = trackGeo(new THREE.BoxGeometry(1.1, 1.15, 356));
   const seawallBase = new THREE.Mesh(seawallBaseGeo, seawallMat);
-  seawallBase.position.set(-55.6, 0.35, 0);
+  seawallBase.position.set(-94.2, 0.35, 0);
   seawallBase.castShadow = true;
   seawallBase.receiveShadow = true;
   root.add(seawallBase);
@@ -256,9 +259,9 @@ export function buildCoastalCityScene(
   const railMetalMat = trackMat(
     new THREE.MeshStandardMaterial({ color: 0x3b444f, roughness: 0.34, metalness: 0.82 }),
   );
-  const railBarGeo = trackGeo(new THREE.BoxGeometry(0.1, 0.08, 160));
+  const railBarGeo = trackGeo(new THREE.BoxGeometry(0.12, 0.08, 356));
   const railBar = new THREE.Mesh(railBarGeo, railMetalMat);
-  railBar.position.set(-55.6, 1.24, 0);
+  railBar.position.set(-94.2, 1.24, 0);
   root.add(railBar);
 
   // --- 4. Multi-Story Modern Coastal Buildings (Composite 3–8 Part Structures!) ---
@@ -449,15 +452,15 @@ export function buildCoastalCityScene(
   windowMaterials.push(distantMat);
 
   const distantTowers: Array<[number, number, number, number, number]> = [
-    [104, -72, 22, 58, 20],
-    [112, -32, 24, 46, 22],
-    [106, 14, 20, 64, 18],
-    [112, 52, 24, 40, 24],
-    [52, -112, 24, 52, 20],
-    [22, -116, 18, 44, 18],
-    [-26, -114, 18, 30, 18],
-    [48, 108, 24, 42, 20],
-    [-24, 110, 20, 32, 18],
+    [262, -110, 26, 68, 24],
+    [270, -48, 28, 56, 26],
+    [264, 24, 24, 74, 22],
+    [272, 92, 28, 52, 26],
+    [130, -214, 28, 62, 24],
+    [34, -218, 24, 54, 22],
+    [-38, -216, 22, 38, 20],
+    [118, 212, 28, 50, 24],
+    [-36, 214, 24, 38, 20],
   ];
   for (const [dx, dz, dw, dh, dd] of distantTowers) {
     const geo = trackGeo(new THREE.BoxGeometry(dw, dh, dd));
@@ -465,6 +468,21 @@ export function buildCoastalCityScene(
     m.position.set(dx, dh / 2, dz);
     root.add(m);
   }
+
+  // --- 5b. Proper Multi-Part Enterable Coastal Houses & Lively Pedestrian System ---
+  const enterableHousesBundle = buildEnterableHouses(
+    layout.enterableHouses,
+    maxAnisotropy,
+    isSoftwareGl,
+  );
+  root.add(enterableHousesBundle.group);
+
+  const pedestrianSystem = createPedestrianSystem(
+    layout.pedestrians,
+    layout.groundSurface,
+    isSoftwareGl,
+  );
+  root.add(pedestrianSystem.group);
 
   // --- 6. Composite Swaying Coastal Palm Trees (Curved Bark Trunk + Crown + Layered Arched Fronds) ---
   const barkTex = trackTex(createPalmBarkTexture(maxAnisotropy));
@@ -777,9 +795,12 @@ export function buildCoastalCityScene(
     windowMaterials,
     roadMaterials,
     streetPointLights,
+    pedestrianSystem,
     updateAmbient,
     smokePool,
     dispose: () => {
+      enterableHousesBundle.dispose();
+      pedestrianSystem.dispose();
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => m.dispose());
       textures.forEach((t) => t.dispose());
